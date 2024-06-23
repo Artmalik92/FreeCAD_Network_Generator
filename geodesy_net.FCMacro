@@ -7,32 +7,29 @@ import FreeCAD, FreeCADGui
 import Draft
 import shutil
 import Part
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox, QPushButton, QFileDialog, QTextEdit
-from PyQt5.QtGui import QFont
-# test 2
+from PySide2.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox, QPushButton, QFileDialog, QTextEdit
+from PySide2.QtGui import QFont
+
 
 class MyWindow(QDialog):
     def __init__(self):
         super().__init__()
 
-        date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-        self.start_date = None
-        self.interval = None
-        self.num_periods = None
-        self.periods_in_year = None
-        self.points_amount = None
-        self.gen_method = None
-        self.date_list = None
-        self.gen_radius = None
-        self.min_distance = None
-        self.max_distance = None
+        self.points_amount = None  # кол-во пунктов
+        self.gen_method = None     # метод генерации
+        self.gen_radius = None     # Радиус генерации (относительно стартового пункта)
+        self.min_distance = None   # Минимальное расстояние между пунктами
+        self.max_distance = None   # Максимальное расстояние между пунктами
 
-        self.temp_file_xyz_name = ''
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.data_dir = os.path.join(self.script_dir, "Data")
-
-        if not os.path.exists(self.data_dir):
-            os.makedirs(self.data_dir)
+        self.temp_file_xyz_name = ''  # Переменные для хранения имен временных файлов
+		
+        folder_name = 'Data'  # Папка для временных файлов и сохранения
+       	
+        if not os.path.exists(folder_name):  # Проверяем наличие папки Data
+            os.makedirs(folder_name)
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))  # Определяем расположение директории
+            self.data_dir = os.path.join(self.script_dir, 'Data')  # Определяем расположения папки для файлов
 
         self.createUI()
 
@@ -41,10 +38,6 @@ class MyWindow(QDialog):
 
         form_layout = QFormLayout()
 
-        self.num_periods_input = QLineEdit()
-        self.start_date_input = QLineEdit()
-        self.interval_input = QComboBox()
-        self.interval_input.addItems(['W', 'D'])
         self.points_spinbox = QSpinBox()
         self.points_spinbox.setRange(3, 100)
         self.points_spinbox.setSingleStep(1)
@@ -52,12 +45,12 @@ class MyWindow(QDialog):
         self.method_input = QComboBox()
         self.method_input.addItems(['centralized', 'consistent'])
         self.gen_radius_input = QLineEdit()
+        self.gen_radius_input.setText('0.5')
         self.min_distance_input = QLineEdit()
+        self.min_distance_input.setText('20000')
         self.max_distance_input = QLineEdit()
+        self.max_distance_input.setText('30000')
 
-        form_layout.addRow('Num of periods:', self.num_periods_input)
-        form_layout.addRow('Start date:', self.start_date_input)
-        form_layout.addRow('Interval(week/day):', self.interval_input)
         form_layout.addRow('Num of points:', self.points_spinbox)
         form_layout.addRow('Generation method:', self.method_input)
         form_layout.addRow('Gen radius (deg):', self.gen_radius_input)
@@ -65,16 +58,6 @@ class MyWindow(QDialog):
         form_layout.addRow('Max distance (m):', self.max_distance_input)
 
         layout.addLayout(form_layout)
-
-        self.harmonics_checkbox = QCheckBox('Harmonics')
-        self.linear_trend_checkbox = QCheckBox('Linear trend')
-        self.noise_checkbox = QCheckBox('Noise')
-        self.impulse_checkbox = QCheckBox('Impulse(random)')
-
-        layout.addWidget(self.harmonics_checkbox)
-        layout.addWidget(self.linear_trend_checkbox)
-        layout.addWidget(self.noise_checkbox)
-        layout.addWidget(self.impulse_checkbox)
 
         self.create_button = QPushButton('Create')
         self.create_button.clicked.connect(self.btn1_press)
@@ -99,7 +82,7 @@ class MyWindow(QDialog):
 
         self.setLayout(layout)
         self.setWindowTitle('Synthetic TimeSeries data app')
-        self.showMaximized()
+        #self.showMaximized()
 
     def load_csv_file(self):
         options = QFileDialog.Options()
@@ -110,29 +93,7 @@ class MyWindow(QDialog):
 
     def btn1_press(self):
         self.command_line.append('Creating model...')
-        date_regex = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-
-        if self.num_periods_input.text().isdigit():
-            self.num_periods = int(self.num_periods_input.text())
-            if self.num_periods < 1:
-                self.command_line.append('Incorrect number of periods')
-                return
-        else:
-            self.command_line.append('Incorrect number of periods')
-            return
-
-        self.start_date = self.start_date_input.text()
-        if not date_regex.match(self.start_date):
-            self.command_line.append('Incorrect date format')
-            return
-
-        self.interval = self.interval_input.currentText()
-        if self.interval == 'W':
-            self.periods_in_year = 52
-        if self.interval == 'D':
-            self.periods_in_year = 365
-
-        self.date_list = pd.date_range(start=self.start_date, periods=self.num_periods, freq=self.interval)
+        
         self.points_amount = self.points_spinbox.value()
         self.gen_method = self.method_input.currentText()
         self.gen_radius = float(self.gen_radius_input.text())
@@ -157,36 +118,17 @@ class MyWindow(QDialog):
 
     def generate_time_series(self, points):
         data = []
-        station_names = ['Station A', 'Station B', 'Station C', 'Station D', 'Station E']
 
         for i, point in enumerate(points):
             lat, lon = point
-            station_name = station_names[i % len(station_names)]
+            station_name = ''.join(np.random.choice(list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 4))
 
-            for date in self.date_list:
-                height = np.random.uniform(0, 100)
+            height = np.random.uniform(0, 100)
 
-                if self.harmonics_checkbox.isChecked():
-                    height += 10 * np.sin(2 * np.pi + date.dayofyear / 365)
-
-                if self.linear_trend_checkbox.isChecked():
-                    height += 0.2 * date.dayofyear
-
-                if self.noise_checkbox.isChecked():
-                    height += np.random.normal(0, 5)
-
-                if self.impulse_checkbox.isChecked():
-                    if np.random.rand() < 0.05:
-                        height += np.random.uniform(10, 20)
-
-                data.append({
-                    'Date': date,
-                    'Station': station_name,
-                    'Latitude': lat,
-                    'Longitude': lon,
-                    'Height': height
-                    
-                })
+            data.append({'Station': station_name,
+                         'Latitude': lat,
+                         'Longitude': lon,
+                         'Height': height})
 
         df = pd.DataFrame(data)
         self.temp_file_xyz_name = os.path.join(self.data_dir, 'temp_xyz.csv')
@@ -220,11 +162,12 @@ class MyWindow(QDialog):
 
             for i, point in enumerate(points):
                 label = labels[i]
+                
                 offset = FreeCAD.Vector(0.01, 0.01, 0)
                 text_position = FreeCAD.Vector(point[0], point[1], 0) + offset
                 text = Draft.make_text([label], text_position)
                 if text is not None:
-                    text.ViewObject.FontSize = 0.00001
+                    text.ViewObject.FontSize = 0.04  # Размер шрифта названий пунктов
 
             FreeCADGui.activeDocument().activeView().viewAxometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
