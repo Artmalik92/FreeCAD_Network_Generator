@@ -2,7 +2,8 @@ import os
 import re
 import pandas as pd
 import numpy as np
-from scipy.spatial import Delaunay
+import math
+from scipy.spatial import Delaunay, KDTree
 import FreeCAD, FreeCADGui
 import Draft
 import shutil
@@ -17,9 +18,11 @@ class MyWindow(QDialog):
 
         self.points_amount = None  # кол-во пунктов
         self.gen_method = None     # метод генерации
-        self.gen_radius = None     # Радиус генерации (относительно стартового пункта)
+        #self.gen_radius = None     # Радиус генерации (относительно стартового пункта)
         self.min_distance = None   # Минимальное расстояние между пунктами
         self.max_distance = None   # Максимальное расстояние между пунктами
+        self.reference_coords_X = None
+        self.reference_coords_Y = None
 
         self.temp_file_xyz_name = ''  # Переменные для хранения имен временных файлов
 		
@@ -44,8 +47,14 @@ class MyWindow(QDialog):
         self.points_spinbox.setValue(10)
         self.method_input = QComboBox()
         self.method_input.addItems(['centralized', 'consistent'])
-        self.gen_radius_input = QLineEdit()
-        self.gen_radius_input.setText('0.5')
+        #self.gen_radius_input = QLineEdit()
+        #self.gen_radius_input.setText('0.5')
+
+        self.reference_coords_X_textbox = QLineEdit()
+        self.reference_coords_X_textbox.setText('10')
+        self.reference_coords_Y_textbox = QLineEdit()
+        self.reference_coords_Y_textbox.setText('10')
+
         self.min_distance_input = QLineEdit()
         self.min_distance_input.setText('20000')
         self.max_distance_input = QLineEdit()
@@ -53,9 +62,11 @@ class MyWindow(QDialog):
 
         form_layout.addRow('Num of points:', self.points_spinbox)
         form_layout.addRow('Generation method:', self.method_input)
-        form_layout.addRow('Gen radius (deg):', self.gen_radius_input)
+        #form_layout.addRow('Gen radius (deg):', self.gen_radius_input)
         form_layout.addRow('Min distance (m):', self.min_distance_input)
         form_layout.addRow('Max distance (m):', self.max_distance_input)
+        form_layout.addRow('Reference coordinate X:', self.reference_coords_X_textbox)
+        form_layout.addRow('Reference coordinate Y:', self.reference_coords_Y_textbox)
 
         layout.addLayout(form_layout)
 
@@ -96,9 +107,11 @@ class MyWindow(QDialog):
         
         self.points_amount = self.points_spinbox.value()
         self.gen_method = self.method_input.currentText()
-        self.gen_radius = float(self.gen_radius_input.text())
+        #self.gen_radius = float(self.gen_radius_input.text())
         self.min_distance = int(self.min_distance_input.text())
         self.max_distance = int(self.max_distance_input.text())
+        self.reference_coords_X = float(self.reference_coords_X_textbox.text())
+        self.reference_coords_Y = float(self.reference_coords_Y_textbox.text())
 
         points = self.create_random_points()
         self.generate_time_series(points)
@@ -106,14 +119,29 @@ class MyWindow(QDialog):
         self.command_line.append("Model created")
 
     def create_random_points(self):
-        ref_lat = 55.0084
-        ref_lon = 82.9357
-
+	
+        if self.min_distance > self.max_distance:
+            raise ValueError("Minimum distance cannot be greater than maximum distance")
+        
         points = []
-        for i in range(self.points_amount):
-            lat = np.random.uniform(ref_lat - self.gen_radius, ref_lat + self.gen_radius)
-            lon = np.random.uniform(ref_lon - self.gen_radius, ref_lon + self.gen_radius)
-            points.append((lat, lon))
+        # Generate the first point 
+         
+        points.append((self.reference_coords_X , self.reference_coords_Y ))
+
+        for i in range(1, self.points_amount):
+            # Generate a random direction (angle in radians)
+            direction = np.random.uniform(0, 2 * math.pi)
+
+            # Generate a random distance within the specified range
+            distance = np.random.uniform(self.min_distance, self.max_distance)
+
+            # Calculate the new point's coordinates
+            prev_x, prev_y = points[-1]
+            new_x = prev_x + distance * math.cos(direction)
+            new_y = prev_y + distance * math.sin(direction)
+
+            points.append((new_x, new_y))
+
         return points
 
     def generate_time_series(self, points):
@@ -150,15 +178,40 @@ class MyWindow(QDialog):
 
             tri = Delaunay(points)
 
+            max_vector_length = 1000000  # adjust this value to set the maximum vector length
+
             for simplex in tri.simplices:
                 point1 = points[simplex[0]]
                 point2 = points[simplex[1]]
                 point3 = points[simplex[2]]
-                polygon = Part.makePolygon([FreeCAD.Vector(point1[0], point1[1], 0),
-                                            FreeCAD.Vector(point2[0], point2[1], 0),
-                                            FreeCAD.Vector(point3[0], point3[1], 0),
-                                            FreeCAD.Vector(point1[0], point1[1], 0)])
-                Part.show(polygon)
+
+                # Calculate the lengths of the vectors
+                length12 = self.calculate_distance(point1[0], point1[1], point2[0], point2[1])
+                length23 = self.calculate_distance(point2[0], point2[1], point3[0], point3[1])
+                length31 = self.calculate_distance(point3[0], point3[1], point1[0], point1[1])
+
+                if length12 <= max_vector_length and length23 <= max_vector_length and length31 <= max_vector_length:
+                    polygon = Part.makePolygon([FreeCAD.Vector(point1[0], point1[1], 0),
+                                                FreeCAD.Vector(point2[0], point2[1], 0),
+                                                FreeCAD.Vector(point3[0], point3[1], 0),
+                                                FreeCAD.Vector(point1[0], point1[1], 0)])
+                    Part.show(polygon)
+
+                    # Add text labels for the vector lengths
+                    midpoint12 = ((point1[0] + point2[0]) / 2, (point1[1] + point2[1]) / 2, 0)
+                    text12 = Draft.make_text([f"{length12:.0f} m"], FreeCAD.Vector(*midpoint12))
+                    if text12 is not None:
+                        text12.ViewObject.FontSize = 0.02
+
+                    midpoint23 = ((point2[0] + point3[0]) / 2, (point2[1] + point3[1]) / 2, 0)
+                    text23 = Draft.make_text([f"{length23:.0f} m"], FreeCAD.Vector(*midpoint23))
+                    if text23 is not None:
+                        text23.ViewObject.FontSize = 1000
+
+                    midpoint31 = ((point3[0] + point1[0]) / 2, (point3[1] + point1[1]) / 2, 0)
+                    text31 = Draft.make_text([f"{length31:.0f} m"], FreeCAD.Vector(*midpoint31))
+                    if text31 is not None:
+                        text31.ViewObject.FontSize = 1000
 
             for i, point in enumerate(points):
                 label = labels[i]
@@ -167,7 +220,7 @@ class MyWindow(QDialog):
                 text_position = FreeCAD.Vector(point[0], point[1], 0) + offset
                 text = Draft.make_text([label], text_position)
                 if text is not None:
-                    text.ViewObject.FontSize = 0.04  # Размер шрифта названий пунктов
+                    text.ViewObject.FontSize = 2000  # Размер шрифта названий пунктов
 
             FreeCADGui.activeDocument().activeView().viewAxometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
@@ -183,6 +236,8 @@ class MyWindow(QDialog):
         except Exception as e:
             self.command_line.append(f'Error saving file: {e}')
 
+    def calculate_distance(self, x1, y1, x2, y2):
+        return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
 
 if __name__ == '__main__':
     main_window = MyWindow()
