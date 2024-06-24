@@ -11,7 +11,6 @@ import Part
 from PySide2.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, QSpinBox, QCheckBox, QPushButton, QFileDialog, QTextEdit
 from PySide2.QtGui import QFont
 
-
 class MyWindow(QDialog):
     def __init__(self):
         super().__init__()
@@ -24,7 +23,7 @@ class MyWindow(QDialog):
         self.reference_coords_X = None
         self.reference_coords_Y = None
 
-        self.temp_file_name = ''  # Переменные для хранения имен временных файлов
+        self.temp_file_xyz_name = ''  # Переменные для хранения имен временных файлов
 		
         folder_name = 'Data'  # Папка для временных файлов и сохранения
        	
@@ -123,8 +122,9 @@ class MyWindow(QDialog):
         if self.min_distance > self.max_distance:
             raise ValueError("Minimum distance cannot be greater than maximum distance")
         
-        points = [] 
-        # first point
+        points = []
+        # Generate the first point 
+         
         points.append((self.reference_coords_X , self.reference_coords_Y ))
 
         for i in range(1, self.points_amount):
@@ -147,134 +147,79 @@ class MyWindow(QDialog):
         data = []
 
         for i, point in enumerate(points):
-            X, Y = point
+            lat, lon = point
             station_name = ''.join(np.random.choice(list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 4))
 
             height = np.random.uniform(0, 100)
 
             data.append({'Station': station_name,
-                         'X': X,
-                         'Y': Y,
+                         'Latitude': lat,
+                         'Longitude': lon,
                          'Height': height})
 
         df = pd.DataFrame(data)
-        self.temp_file_name = os.path.join(self.data_dir, 'temp.csv')
-        df.to_csv(self.temp_file_name, sep=';', index=False)
+        self.temp_file_xyz_name = os.path.join(self.data_dir, 'temp_xyz.csv')
+        df.to_csv(self.temp_file_xyz_name, sep=';', index=False)
 
-        self.command_line.append(f"Time series generated and saved to file: {self.temp_file_name}")
+        self.command_line.append(f"Time series generated and saved to file: {self.temp_file_xyz_name}")
 
     def btn2_press(self):
         try:
-            if not self.temp_file_name:
+            if not self.temp_file_xyz_name:
                 self.command_line.append("No CSV file loaded. Please load a CSV file first.")
                 return
 
             doc = FreeCAD.newDocument("NetworkMap")
-            data = pd.read_csv(self.temp_file_name, delimiter=';')
+            data = pd.read_csv(self.temp_file_xyz_name, delimiter=';')
 
-            points = np.array(data[['X', 'Y']])
+            points = np.array(data[['Longitude', 'Latitude']])
             labels = data['Station'].astype(str).values
-            
-            max_vector_length = self.max_distance  # adjust this value to set the maximum vector length
 
-            tri = Delaunay(points)
+            # Create a KDTree for efficient nearest neighbor search
+            tree = KDTree(points)
+
+            max_vector_length = self.max_distance  # adjust this value to set the maximum vector length
             edges = set()
-            # получаем все ребра треугольников и добавляем их в множество edges
-            for n in range(tri.nsimplex):
-                simplex = tri.simplices[n]
+            # Get all edges of the triangles and add them to the set edges
+            for n in range(len(points)):
+                simplex = Delaunay(points).simplices[n]
                 for i in range(3):
                     for j in range(i, 3):
                         if i != j:
                             edges.add((simplex[i], simplex[j]))
 
-            # рисуем ребра треугольников на графике и добавляем текст с длиной линий
-            edge_labels = set()
+            # Connect only neighboring points
             for edge in edges:
-                x1, y1 = data.iloc[edge[0]][['X', 'Y']]
-                x2, y2 = data.iloc[edge[1]][['X', 'Y']]
-                length = self.calculate_distance(x1, y1, x2, y2)
-                if length <= max_vector_length:  # проверяем длину линии
-                    label = f'{length:.0f} m'
-                    edge_labels.add((min(edge), max(edge), label))
-                    point_1 = FreeCAD.Vector(x1, y1, 0)
-                    point_2 = FreeCAD.Vector(x2, y2, 0)
-                    line = Draft.makeLine(point_1, point_2)
-                    doc.recompute()
-            
-            # рисуем текст с информацией о длинах линий
-            for label in edge_labels:
-                edge = label[:2]
-                label_text = label[2]
-                x1, y1 = data.iloc[edge[0]][['X', 'Y']]
-                x2, y2 = data.iloc[edge[1]][['X', 'Y']]
-                label_x = (x1 + x2) / 2
-                label_y = (y1 + y2) / 2
-                rotation = np.rad2deg(np.arctan2(y2 - y1, x2 - x1))
-                if rotation > 90:
-                    rotation -= 180
-                elif rotation < -90:
-                    rotation += 180
-                
-                midpoint = ((x1 + x2) / 2, (y1 + y2) / 2)
-                text_obj = Draft.make_text(label_text, FreeCAD.Vector(*midpoint))
-                text_obj.Placement = FreeCAD.Placement(FreeCAD.Vector(*midpoint), FreeCAD.Rotation(rotation, 0, 0))
-                if text_obj is not None:
-                    text_obj.ViewObject.FontSize = 1000
+                point1 = points[edge[0]]
+                point2 = points[edge[1]]
+                distance = np.linalg.norm(point1 - point2)
+                if distance <= max_vector_length:
+                    # Create a line between the two points
+                    line = Part.makeLine(FreeCAD.Vector(*point1), FreeCAD.Vector(*point2))
+                    Part.show(line)
 
-            # рисуем текст названий пунктов
+                    # Add text label for the line length
+                    midpoint = ((point1[0] + point2[0]) / 2, (point1[1] + point2[1]) / 2, 0)
+                    text = Draft.make_text([f"{distance:.0f} m"], FreeCAD.Vector(*midpoint))
+                    if text is not None:
+                        text.ViewObject.FontSize = 1000
+
+            # Create points and labels in FreeCAD
             for i, point in enumerate(points):
                 label = labels[i]
-                
-                offset = FreeCAD.Vector(0.01, 0.01, 0)
-                text_position = FreeCAD.Vector(point[0], point[1], 0) + offset
-                text = Draft.make_text([label], text_position)
-         
-                if text is not None:
-                    text.ViewObject.FontSize = 2000  # Размер шрифта названий пунктов
 
-            '''
-            for simplex in tri.simplices:
-                point1 = points[simplex[0]]
-                point2 = points[simplex[1]]
-                point3 = points[simplex[2]]
+                # Create a vertex object
+                point_obj = Part.Vertex(FreeCAD.Vector(*point))
+                Part.show(point_obj)
 
-                # Calculate the lengths of the vectors
-                length12 = self.calculate_distance(point1[0], point1[1], point2[0], point2[1])
-                length23 = self.calculate_distance(point2[0], point2[1], point3[0], point3[1])
-                length31 = self.calculate_distance(point3[0], point3[1], point1[0], point1[1])
-
-                if length12 <= max_vector_length and length23 <= max_vector_length and length31 <= max_vector_length:
-                    polygon = Part.makePolygon([FreeCAD.Vector(point1[0], point1[1], 0),
-                                                FreeCAD.Vector(point2[0], point2[1], 0),
-                                                FreeCAD.Vector(point3[0], point3[1], 0),
-                                                FreeCAD.Vector(point1[0], point1[1], 0)])
-                    Part.show(polygon)
-
-                    # Add text labels for the vector lengths
-                    midpoint12 = ((point1[0] + point2[0]) / 2, (point1[1] + point2[1]) / 2, 0)
-                    text12 = Draft.make_text([f"{length12:.0f} m"], FreeCAD.Vector(*midpoint12))
-                    if text12 is not None:
-                        text12.ViewObject.FontSize = 1000
-
-                    midpoint23 = ((point2[0] + point3[0]) / 2, (point2[1] + point3[1]) / 2, 0)
-                    text23 = Draft.make_text([f"{length23:.0f} m"], FreeCAD.Vector(*midpoint23))
-                    if text23 is not None:
-                        text23.ViewObject.FontSize = 1000
-
-                    midpoint31 = ((point3[0] + point1[0]) / 2, (point3[1] + point1[1]) / 2, 0)
-                    text31 = Draft.make_text([f"{length31:.0f} m"], FreeCAD.Vector(*midpoint31))
-                    if text31 is not None:
-                        text31.ViewObject.FontSize = 1000
-
-            for i, point in enumerate(points):
-                label = labels[i]
-                
+                # Create a text label for the point
                 offset = FreeCAD.Vector(0.01, 0.01, 0)
                 text_position = FreeCAD.Vector(point[0], point[1], 0) + offset
                 text = Draft.make_text([label], text_position)
                 if text is not None:
                     text.ViewObject.FontSize = 2000  # Размер шрифта названий пунктов
-            '''
+
+
             FreeCADGui.activeDocument().activeView().viewAxometric()
             FreeCADGui.SendMsgToActiveView("ViewFit")
         except Exception as e:
@@ -291,56 +236,6 @@ class MyWindow(QDialog):
 
     def calculate_distance(self, x1, y1, x2, y2):
         return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-
-    def triangulation(self, df, doc):
-        points = np.array(df[['X', 'Y']])
-        labels = df['Station'].astype(str).values
-
-        tri = Delaunay(points)
-
-        max_vector_length = 1000000  # adjust this value to set the maximum vector length
-
-        for simplex in tri.simplices:
-            point1 = points[simplex[0]]
-            point2 = points[simplex[1]]
-            point3 = points[simplex[2]]
-
-            # Calculate the lengths of the vectors
-            length12 = self.calculate_distance(point1[0], point1[1], point2[0], point2[1])
-            length23 = self.calculate_distance(point2[0], point2[1], point3[0], point3[1])
-            length31 = self.calculate_distance(point3[0], point3[1], point1[0], point1[1])
-
-            if length12 <= max_vector_length and length23 <= max_vector_length and length31 <= max_vector_length:
-                polygon = Part.makePolygon([FreeCAD.Vector(point1[0], point1[1], 0),
-                                            FreeCAD.Vector(point2[0], point2[1], 0),
-                                            FreeCAD.Vector(point3[0], point3[1], 0),
-                                            FreeCAD.Vector(point1[0], point1[1], 0)])
-                Part.show(polygon)
-
-                # Add text labels for the vector lengths
-                midpoint12 = ((point1[0] + point2[0]) / 2, (point1[1] + point2[1]) / 2, 0)
-                text12 = Draft.make_text([f"{length12:.0f} m"], FreeCAD.Vector(*midpoint12))
-                if text12 is not None:
-                    text12.ViewObject.FontSize = 1000
-
-                midpoint23 = ((point2[0] + point3[0]) / 2, (point2[1] + point3[1]) / 2, 0)
-                text23 = Draft.make_text([f"{length23:.0f} m"], FreeCAD.Vector(*midpoint23))
-                if text23 is not None:
-                    text23.ViewObject.FontSize = 1000
-
-                midpoint31 = ((point3[0] + point1[0]) / 2, (point3[1] + point1[1]) / 2, 0)
-                text31 = Draft.make_text([f"{length31:.0f} m"], FreeCAD.Vector(*midpoint31))
-                if text31 is not None:
-                    text31.ViewObject.FontSize = 1000
-
-        for i, point in enumerate(points):
-            label = labels[i]
-        
-            offset = FreeCAD.Vector(0.01, 0.01, 0)
-            text_position = FreeCAD.Vector(point[0], point[1], 0) + offset
-            text = Draft.make_text([label], text_position)
-            if text is not None:
-                text.ViewObject.FontSize = 2000  # Размер шрифта названий пунктов
 
 if __name__ == '__main__':
     main_window = MyWindow()
